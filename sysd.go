@@ -10,27 +10,56 @@ import (
 )
 
 const (
+	// GracefulShutdownTimeout is the default graceful shutdown timeout
 	GracefulShutdownTimeout = 20 * time.Second
-	StatusCheckInterval     = 5 * time.Second
+	// StatusCheckInterval is the default status check interval
+	StatusCheckInterval = 5 * time.Second
 )
 
-type OnFailure string
+// OnFailure is an enum that represents the action to take when an app fails
+type OnFailure struct {
+	name         string
+	retry        int
+	retryTimeout time.Duration
+}
 
-const (
-	OnFailureRestart OnFailure = "restart"
-	OnFailureStop    OnFailure = "stop"
-	OnFailureIgnore  OnFailure = "ignore"
+var (
+	// OnFailureRestart will restart the app if it fails
+	OnFailureRestart *OnFailure = &OnFailure{name: "restart", retry: 3, retryTimeout: 5 * time.Second}
+	// OnFailureIgnore will ignore the app failure
+	OnFailureIgnore *OnFailure = &OnFailure{name: "ignore"}
 )
+
+// Equal returns true if the OnFailure is equal to the target
+func (o *OnFailure) Equal(target *OnFailure) bool {
+	return o.name == target.name
+}
+
+// String returns the string representation of the OnFailure
+func (o *OnFailure) String() string {
+	return o.name
+}
+
+// Retry set OnFailure number of retries
+func (o *OnFailure) Retry(retry int) *OnFailure {
+	o.retry = retry
+	return o
+}
+
+// RetryTimeout set OnFailure retry timeout
+func (o *OnFailure) RetryTimeout(retryTimeout time.Duration) *OnFailure {
+	o.retryTimeout = retryTimeout
+	return o
+}
 
 // ErrAppAlreadyExists is returned when an app is added to the systemd service
 // but an app with the same name already exists
 var ErrAppAlreadyExists = errors.New("app already exists")
 
+// App is an interface that represents an app
 type App interface {
 	// Start starts the app, should be blocking until the context is cancelled
-	Start(ctx context.Context) error
-	// Stop stops the app,
-	Stop(ctx context.Context) error
+	Start(ctx context.Context, restored bool) error
 	// Status returns the status of the app
 	Status(ctx context.Context) error
 	// Name returns the name of the app
@@ -40,13 +69,13 @@ type App interface {
 type appItem struct {
 	App
 	name      string
-	onFailure OnFailure
+	onFailure *OnFailure
 }
 
 // Systemd is a struct that represents a systemd service
 type Systemd struct {
 	apps             map[string]appItem
-	defaultOnFailure OnFailure
+	defaultOnFailure *OnFailure
 
 	logger *logger
 
@@ -82,6 +111,7 @@ func (s *Systemd) Add(app App) error {
 	return nil
 }
 
+// SetLogger sets the logger
 func (s *Systemd) SetLogger(l Logger) {
 	s.logger = &logger{l: l}
 }
@@ -97,11 +127,12 @@ func (s *Systemd) SetStatusCheckInterval(t time.Duration) {
 }
 
 // SetDefaultOnFailure sets the default on failure action
-func (s *Systemd) SetDefaultOnFailure(onFailure OnFailure) {
+func (s *Systemd) SetDefaultOnFailure(onFailure *OnFailure) {
 	s.defaultOnFailure = onFailure
 }
 
-func (s *Systemd) SetAppOnFailure(appName string, onFailure OnFailure) {
+// SetAppOnFailure sets the on failure action for a specific app
+func (s *Systemd) SetAppOnFailure(appName string, onFailure *OnFailure) {
 	if app, ok := s.apps[appName]; ok {
 		app.onFailure = onFailure
 		s.apps[appName] = app
@@ -116,7 +147,7 @@ func (s *Systemd) Start(ctx context.Context) error {
 	errs := make(chan error, len(s.apps))
 	wg := sync.WaitGroup{}
 	for _, app := range s.apps {
-		s.startApp(ctx, app, &wg, errs)
+		s.startApp(ctx, app, &wg, errs, false)
 	}
 
 	go s.watchForStatus(ctx, &wg, errs)
@@ -125,7 +156,8 @@ func (s *Systemd) Start(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return s.stopAllApps(context.Background())
+			s.WaitForAppsStop(&wg) // wait for all apps to stop
+			return nil
 		case err := <-errs:
 			if !errors.Is(err, context.Canceled) {
 				return err
@@ -134,7 +166,7 @@ func (s *Systemd) Start(ctx context.Context) error {
 	}
 }
 
-func (s *Systemd) startApp(ctx context.Context, app appItem, wg *sync.WaitGroup, errs chan error) {
+func (s *Systemd) startApp(ctx context.Context, app appItem, wg *sync.WaitGroup, errs chan error, restored bool) {
 	wg.Add(1)
 	go func(app appItem) {
 		defer func() {
@@ -148,35 +180,35 @@ func (s *Systemd) startApp(ctx context.Context, app appItem, wg *sync.WaitGroup,
 			}
 		}()
 		s.logger.Info("Starting app: %q", app.Name())
-		errs <- app.Start(ctx)
+		// start the app with retry and timeout if configured
+		if err := startWithRetry(ctx, app, restored); err != nil {
+			errs <- err
+		}
 	}(app)
 }
 
-// Stop stops the systemd service, and all apps within.
-// it will return an error if any of the apps fail to stop
-func (s *Systemd) stopAllApps(ctx context.Context) error {
-	s.logger.Info("Stopping apps, gracefully shutdown timeout: %d", s.graceFullShutdownTimeout)
-	shutDownCtx, cancel := context.WithTimeout(ctx, s.graceFullShutdownTimeout)
-	defer cancel()
-
-	// shutdown all apps
-	errs := make(chan error, len(s.apps))
-	wg := sync.WaitGroup{}
-	for _, app := range s.apps {
-		wg.Add(1)
-		go func(app App) {
-			defer wg.Done()
-			if err := app.Stop(shutDownCtx); err != nil {
-				errs <- err
-			}
-		}(app)
+func startWithRetry(ctx context.Context, app appItem, restored bool) error {
+	var err error
+	for i := 0; i < app.onFailure.retry; i++ {
+		if err = app.Start(ctx, restored); err != nil {
+			time.Sleep(app.onFailure.retryTimeout)
+			continue
+		}
+		return nil
 	}
+	return err
+}
 
+// WaitForAppsStop waits for all apps to stop or context to be cancelled
+func (s *Systemd) WaitForAppsStop(wg *sync.WaitGroup) {
+	// wait for all apps to stop or context to be cancelled
 	select {
-	case <-shutDownCtx.Done():
-		return shutDownCtx.Err()
-	case err := <-errs:
-		return err
+	case <-time.After(s.graceFullShutdownTimeout):
+		s.logger.Error("Shutdown timeout, forcefully stopping apps")
+		return
+	case <-waitForGroup(wg):
+		s.logger.Info("All apps stopped")
+		return
 	}
 }
 
@@ -195,17 +227,25 @@ func (s *Systemd) watchForStatus(ctx context.Context, wg *sync.WaitGroup, errs c
 					switch app.onFailure {
 					case OnFailureRestart:
 						s.logger.Info("Restarting app %q", app.Name())
-						s.startApp(ctx, app, wg, errs)
-					case OnFailureStop:
-						s.logger.Info("Stopping app %q", app.Name())
-						if err := app.Stop(ctx); err != nil {
-							errs <- err
-						}
+						s.startApp(ctx, app, wg, errs, true)
 					case OnFailureIgnore:
 						s.logger.Info("Ignoring app %q failure", app.Name())
+						// remove app from apps list
+						delete(s.apps, app.Name())
+						// remove app from wait group
+						wg.Add(-1)
 					}
 				}
 			}
 		}
 	}
+}
+
+func waitForGroup(wg *sync.WaitGroup) <-chan struct{} {
+	c := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(c)
+	}()
+	return c
 }

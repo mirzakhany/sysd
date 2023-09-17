@@ -32,3 +32,10 @@ func ShutdownGracefully(ctx context.Context, callback func() error) error {
 	}
 	return nil
 }
+
+// WaitExitSignal get os signals
+func WaitExitSignal() os.Signal {
+	quit := make(chan os.Signal, 6)
+	signal.Notify(quit, syscall.SIGABRT, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGINT)
+	return <-quit
+}

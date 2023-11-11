@@ -16,19 +16,26 @@ const (
 	StatusCheckInterval = 5 * time.Second
 )
 
+var (
+	// OnFailureRestart will restart the app if it fails
+	OnFailureRestart *OnFailure = &OnFailure{name: "restart", retry: 3, retryTimeout: 5 * time.Second}
+	// OnFailureIgnore will ignore the app failure
+	OnFailureIgnore *OnFailure = &OnFailure{name: "ignore"}
+
+	// ErrAppAlreadyExists is returned when an app is added to the systemd service
+	// but an app with the same name already exists
+	ErrAppAlreadyExists = errors.New("app already exists")
+
+	// ErrAppNotExists is returned when an app is not found in the systemd service
+	ErrAppNotExists = errors.New("app not exists")
+)
+
 // OnFailure is an enum that represents the action to take when an app fails
 type OnFailure struct {
 	name         string
 	retry        int
 	retryTimeout time.Duration
 }
-
-var (
-	// OnFailureRestart will restart the app if it fails
-	OnFailureRestart *OnFailure = &OnFailure{name: "restart", retry: 3, retryTimeout: 5 * time.Second}
-	// OnFailureIgnore will ignore the app failure
-	OnFailureIgnore *OnFailure = &OnFailure{name: "ignore"}
-)
 
 // Equal returns true if the OnFailure is equal to the target
 func (o *OnFailure) Equal(target *OnFailure) bool {
@@ -52,13 +59,10 @@ func (o *OnFailure) RetryTimeout(retryTimeout time.Duration) *OnFailure {
 	return o
 }
 
-// ErrAppAlreadyExists is returned when an app is added to the systemd service
-// but an app with the same name already exists
-var ErrAppAlreadyExists = errors.New("app already exists")
-
 // App is an interface that represents an app
 type App interface {
 	// Start starts the app, should be blocking until the context is cancelled
+	// restored is true if the app is being restored after a failure
 	Start(ctx context.Context, restored bool) error
 	// Status returns the status of the app
 	Status(ctx context.Context) error
@@ -70,6 +74,7 @@ type appItem struct {
 	App
 	name      string
 	onFailure *OnFailure
+	priority  int
 }
 
 // Systemd is a struct that represents a systemd service
@@ -83,8 +88,8 @@ type Systemd struct {
 	statusCheckInterval      time.Duration
 }
 
-// NewSystemd returns a new Systemd struct
-func NewSystemd() *Systemd {
+// New returns a new Systemd struct
+func New() *Systemd {
 	return &Systemd{
 		graceFullShutdownTimeout: GracefulShutdownTimeout,
 		statusCheckInterval:      StatusCheckInterval,
@@ -107,6 +112,7 @@ func (s *Systemd) Add(app App) error {
 		App:       app,
 		name:      app.Name(),
 		onFailure: s.defaultOnFailure,
+		priority:  0,
 	}
 	return nil
 }
@@ -132,11 +138,23 @@ func (s *Systemd) SetDefaultOnFailure(onFailure *OnFailure) {
 }
 
 // SetAppOnFailure sets the on failure action for a specific app
-func (s *Systemd) SetAppOnFailure(appName string, onFailure *OnFailure) {
+func (s *Systemd) SetAppOnFailure(appName string, onFailure *OnFailure) error {
 	if app, ok := s.apps[appName]; ok {
 		app.onFailure = onFailure
 		s.apps[appName] = app
 	}
+
+	return ErrAppNotExists
+}
+
+// SetAppPriority sets the priority for a specific app
+func (s *Systemd) SetAppPriority(appName string, priority int) error {
+	if app, ok := s.apps[appName]; ok {
+		app.priority = priority
+		s.apps[appName] = app
+	}
+
+	return ErrAppNotExists
 }
 
 // Start starts the systemd service, and all apps within.
@@ -146,7 +164,16 @@ func (s *Systemd) Start(ctx context.Context) error {
 	// Start apps in parallel
 	errs := make(chan error, len(s.apps))
 	wg := sync.WaitGroup{}
+
+	apps := make([]appItem, 0, len(s.apps))
 	for _, app := range s.apps {
+		apps = append(apps, app)
+	}
+
+	// sort apps by priority
+	sortByPriority(apps)
+
+	for _, app := range apps {
 		s.startApp(ctx, app, &wg, errs, false)
 	}
 
@@ -161,6 +188,16 @@ func (s *Systemd) Start(ctx context.Context) error {
 		case err := <-errs:
 			if !errors.Is(err, context.Canceled) {
 				return err
+			}
+		}
+	}
+}
+
+func sortByPriority(apps []appItem) {
+	for i := 0; i < len(apps); i++ {
+		for j := i + 1; j < len(apps); j++ {
+			if apps[i].priority > apps[j].priority {
+				apps[i], apps[j] = apps[j], apps[i]
 			}
 		}
 	}

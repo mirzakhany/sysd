@@ -1,14 +1,13 @@
 package main
 
 import (
-	"syscall"
 	"time"
 
 	"github.com/mirzakhany/sysd"
 )
 
 func main() {
-	systemd := sysd.NewSystemd()
+	systemd := sysd.New()
 	systemd.SetGraceFulShutdownTimeout(4 * time.Second)
 	systemd.SetStatusCheckInterval(1 * time.Second)
 
@@ -29,7 +28,7 @@ func main() {
 	systemd.SetAppOnFailure(appC.Name(), sysd.OnFailureRestart.Retry(4).RetryTimeout(2*time.Second))
 
 	// listen for os exit signals
-	ctx := sysd.ContextWithSignal(syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+	ctx := sysd.ContextWithSignals()
 	// start all apps
 	if err := systemd.Start(ctx); err != nil {
 		panic(err)

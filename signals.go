@@ -7,9 +7,9 @@ import (
 	"syscall"
 )
 
-// ContextWithSignal returns a context with by default is listening to
+// ContextWithSignals returns a context with by default is listening to
 // SIGHUP, SIGINT, SIGTERM, SIGQUIT os signals to cancel
-func ContextWithSignal(sig ...os.Signal) context.Context {
+func ContextWithSignals(sig ...os.Signal) context.Context {
 	if len(sig) == 0 {
 		sig = []os.Signal{syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT}
 	}

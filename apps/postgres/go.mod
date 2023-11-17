@@ -4,10 +4,8 @@ go 1.21.3
 
 require (
 	github.com/jackc/pgx/v5 v5.5.0
-	github.com/mirzakhany/sysd v0.1.0
+	github.com/mirzakhany/sysd v0.1.1
 )
-
-replace github.com/mirzakhany/sysd => ../../
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect

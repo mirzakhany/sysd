@@ -4,7 +4,7 @@ go 1.21.3
 
 require (
 	github.com/jackc/pgx/v5 v5.5.0
-	github.com/mirzakhany/sysd v0.1.1
+	github.com/mirzakhany/sysd v0.1.2
 )
 
 require (

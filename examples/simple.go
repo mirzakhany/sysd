@@ -19,13 +19,17 @@ func main() {
 	if err := systemd.Add(appB); err != nil {
 		panic(err)
 	}
-	systemd.SetAppOnFailure(appB.Name(), sysd.OnFailureIgnore)
+	if err := systemd.SetAppOnFailure(appB.Name(), sysd.OnFailureIgnore); err != nil {
+		panic(err)
+	}
 
 	appC := &appC{}
 	if err := systemd.Add(appC); err != nil {
 		panic(err)
 	}
-	systemd.SetAppOnFailure(appC.Name(), sysd.OnFailureRestart.Retry(4).RetryTimeout(2*time.Second))
+	if err := systemd.SetAppOnFailure(appC.Name(), sysd.OnFailureRestart.Retry(4).RetryTimeout(2*time.Second)); err != nil {
+		panic(err)
+	}
 
 	// listen for os exit signals
 	ctx := sysd.ContextWithSignals()

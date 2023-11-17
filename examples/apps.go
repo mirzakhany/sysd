@@ -12,7 +12,7 @@ import (
 type appA struct {
 }
 
-func (a *appA) Start(ctx context.Context, restored bool) error {
+func (a *appA) Start(ctx context.Context) error {
 	log.Println("appA started")
 
 	defer func() {
@@ -39,7 +39,7 @@ type appB struct {
 	failCounter int
 }
 
-func (a *appB) Start(ctx context.Context, restored bool) error {
+func (a *appB) Start(ctx context.Context) error {
 	log.Println("appB started")
 
 	// rest failure counter
@@ -73,10 +73,10 @@ type appC struct {
 	restoreCounter int
 }
 
-func (a *appC) Start(ctx context.Context, restored bool) error {
+func (a *appC) Start(ctx context.Context) error {
 	log.Println("appC started")
 
-	if restored {
+	if sysd.IsRestored(ctx) {
 		a.restoreCounter++
 	}
 

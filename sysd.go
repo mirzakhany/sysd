@@ -63,7 +63,7 @@ func (o *OnFailure) RetryTimeout(retryTimeout time.Duration) *OnFailure {
 type App interface {
 	// Start starts the app, should be blocking until the context is cancelled
 	// restored is true if the app is being restored after a failure
-	Start(ctx context.Context, restored bool) error
+	Start(ctx context.Context) error
 	// Status returns the status of the app
 	Status(ctx context.Context) error
 	// Name returns the name of the app
@@ -174,7 +174,7 @@ func (s *Systemd) Start(ctx context.Context) error {
 	sortByPriority(apps)
 
 	for _, app := range apps {
-		s.startApp(ctx, app, &wg, errs, false)
+		s.startApp(ctx, app, &wg, errs)
 	}
 
 	go s.watchForStatus(ctx, &wg, errs)
@@ -203,7 +203,7 @@ func sortByPriority(apps []appItem) {
 	}
 }
 
-func (s *Systemd) startApp(ctx context.Context, app appItem, wg *sync.WaitGroup, errs chan error, restored bool) {
+func (s *Systemd) startApp(ctx context.Context, app appItem, wg *sync.WaitGroup, errs chan error) {
 	wg.Add(1)
 	go func(app appItem) {
 		defer func() {
@@ -218,16 +218,16 @@ func (s *Systemd) startApp(ctx context.Context, app appItem, wg *sync.WaitGroup,
 		}()
 		s.logger.Info("Starting app: %q", app.Name())
 		// start the app with retry and timeout if configured
-		if err := startWithRetry(ctx, app, restored); err != nil {
+		if err := startWithRetry(ctx, app); err != nil {
 			errs <- err
 		}
 	}(app)
 }
 
-func startWithRetry(ctx context.Context, app appItem, restored bool) error {
+func startWithRetry(ctx context.Context, app appItem) error {
 	var err error
 	for i := 0; i < app.onFailure.retry; i++ {
-		if err = app.Start(ctx, restored); err != nil {
+		if err = app.Start(ctx); err != nil {
 			time.Sleep(app.onFailure.retryTimeout)
 			continue
 		}
@@ -264,7 +264,7 @@ func (s *Systemd) watchForStatus(ctx context.Context, wg *sync.WaitGroup, errs c
 					switch app.onFailure {
 					case OnFailureRestart:
 						s.logger.Info("Restarting app %q", app.Name())
-						s.startApp(ctx, app, wg, errs, true)
+						s.startApp(restoredContext(ctx), app, wg, errs)
 					case OnFailureIgnore:
 						s.logger.Info("Ignoring app %q failure", app.Name())
 						// remove app from apps list
@@ -285,4 +285,17 @@ func waitForGroup(wg *sync.WaitGroup) <-chan struct{} {
 		close(c)
 	}()
 	return c
+}
+
+type restoredTask struct{}
+
+func restoredContext(ctx context.Context) context.Context {
+	return context.WithValue(ctx, restoredTask{}, true)
+}
+
+func IsRestored(ctx context.Context) bool {
+	if ctx.Value(restoredTask{}) != nil {
+		return true
+	}
+	return false
 }

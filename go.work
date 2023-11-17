@@ -1,0 +1,8 @@
+go 1.21.3
+
+
+use (
+	.
+	./apps/httpd
+	./apps/postgres
+)

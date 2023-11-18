@@ -20,7 +20,7 @@ type HTTPd struct {
 	server *http.Server
 }
 
-func (h *HTTPd) New(Host string, Port int, handler http.Handler) *HTTPd {
+func New(Host string, Port int, handler http.Handler) *HTTPd {
 	return &HTTPd{
 		Host:    Host,
 		Port:    Port,

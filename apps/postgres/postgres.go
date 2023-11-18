@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/mirzakhany/sysd"
 )
@@ -13,52 +11,31 @@ import (
 var _ sysd.App = &Postgres{}
 
 type Postgres struct {
-	DatabaseName string
-	Username     string
-	Password     string
-	Host         string
-	Port         int
-
-	conn *pgxpool.Pool
+	connConf *pgxpool.Config
+	conn     *pgxpool.Pool
 }
 
-func (p *Postgres) New(DatabaseName, Username, Password, Host string, Port int) *Postgres {
-	return &Postgres{
-		DatabaseName: DatabaseName,
-		Username:     Username,
-		Password:     Password,
-		Host:         Host,
-		Port:         Port,
-	}
-}
-
-func NewWithURI(uri string) (*Postgres, error) {
-	conn, err := pgx.ParseConfig(uri)
+func New(DatabaseName, Username, Password, Host string, Port int) (*Postgres, error) {
+	uri := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable", Username, Password, Host, Port, DatabaseName)
+	conf, err := pgxpool.ParseConfig(uri)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Postgres{
-		DatabaseName: conn.Database,
-		Username:     conn.User,
-		Password:     conn.Password,
-		Host:         conn.Host,
-		Port:         int(conn.Port),
-	}, nil
+	return &Postgres{connConf: conf}, nil
+}
+
+func NewWithURI(uri string) (*Postgres, error) {
+	conf, err := pgxpool.ParseConfig(uri)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Postgres{connConf: conf}, nil
 }
 
 func (p *Postgres) Start(ctx context.Context) error {
-	conn, err := pgxpool.NewWithConfig(ctx, &pgxpool.Config{
-		ConnConfig: &pgx.ConnConfig{
-			Config: pgconn.Config{
-				Host:     p.Host,
-				Port:     uint16(p.Port),
-				Database: p.DatabaseName,
-				User:     p.Username,
-				Password: p.Password,
-			},
-		},
-	})
+	conn, err := pgxpool.NewWithConfig(ctx, p.connConf)
 	if err != nil {
 		return fmt.Errorf("unable to connect to database: %w", err)
 	}
